@@ -8,6 +8,7 @@ const TABS = [
   { label: 'Atividade', icon: '📡', href: '/atividade' },
   { label: 'Nova Viagem', icon: '＋', href: '/nova-viagem' },
   { label: 'Diário', icon: '📓', href: '/diario' },
+  { label: 'Linhas', icon: '🗺️', href: '/linhas' },
   { label: 'Notificações', icon: '🔔', href: '/notificacoes' },
   { label: 'Relatórios', icon: '📊', href: '/relatorios' },
   { label: 'Perfil', icon: '👤', href: '/perfil' },
