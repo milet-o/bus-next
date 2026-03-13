@@ -79,27 +79,35 @@ export default function LinhaPage() {
 
   const buscarGPS = async () => {
     setLoading(true)
+
     const agora = new Date()
+    // Só últimos 2 minutos pra pegar posição atual
+    const inicio = new Date(agora.getTime() - 2 * 60 * 1000)
     const pad = (n: number) => String(n).padStart(2, '0')
     const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-    const inicio = new Date(agora.getTime() - 20 * 60 * 1000)
 
     const codigos = [linhaCode, linhaCode.padStart(4, '0')].filter((v, i, a) => a.indexOf(v) === i)
 
     for (const codigo of codigos) {
       try {
-        // Usa o rewrite /smtr/ como proxy — mesma origem, sem CORS
         const url = `/smtr/gps/sppo?linha=${encodeURIComponent(codigo)}&dataInicial=${encodeURIComponent(fmt(inicio))}&dataFinal=${encodeURIComponent(fmt(agora))}`
         const res = await fetch(url)
         if (!res.ok) continue
         const data = await res.json()
-        if (!data.veiculos?.length) continue
+        const todos: any[] = data.veiculos || []
+        if (!todos.length) continue
 
+        // Pega posição mais recente por veículo
         const map: Record<string, any> = {}
-        for (const v of data.veiculos) {
-          if (!map[v.ordem] || v.datahora > map[v.ordem].datahora) map[v.ordem] = v
+        for (const v of todos) {
+          if (v.latitude && v.longitude && v.latitude !== 0 && v.longitude !== 0) {
+            if (!map[v.ordem] || v.datahora > map[v.ordem].datahora) {
+              map[v.ordem] = v
+            }
+          }
         }
-        const vs = Object.values(map).filter((v: any) => v.latitude && v.longitude) as Veiculo[]
+
+        const vs = Object.values(map) as Veiculo[]
         setVeiculos(vs)
         setUltimaAtualizacao(new Date())
         atualizarMarcadores(vs)
@@ -193,7 +201,7 @@ export default function LinhaPage() {
             <div className="absolute inset-0 flex flex-col items-center justify-center z-10" style={{ background: 'rgba(8,10,15,0.85)' }}>
               <div className="text-4xl mb-3">🚏</div>
               <div className="text-sm font-medium mb-1" style={{ color: '#e8eaf2' }}>Nenhum ônibus encontrado</div>
-              <div className="text-xs" style={{ color: '#6b7394' }}>Linha pode estar fora de operação ou sem GPS</div>
+              <div className="text-xs" style={{ color: '#6b7394' }}>Linha fora de operação ou sem GPS</div>
             </div>
           )}
         </div>
@@ -204,7 +212,7 @@ export default function LinhaPage() {
             <div className="card overflow-hidden">
               {veiculos.slice(0, 25).map((v, i) => (
                 <div key={v.ordem} className="flex items-center gap-4 px-4 py-3"
-                  style={{ borderBottom: i < veiculos.length - 1 ? '1px solid #1e2235' : 'none' }}>
+                  style={{ borderBottom: i < Math.min(veiculos.length, 25) - 1 ? '1px solid #1e2235' : 'none' }}>
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm flex-shrink-0" style={{ background: 'rgba(255,59,59,0.1)' }}>🚌</div>
                   <div className="flex-1">
                     <div className="text-sm font-mono font-semibold" style={{ color: '#e8eaf2' }}>{v.ordem}</div>
