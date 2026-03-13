@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+export const runtime = 'edge'
+export const preferredRegion = 'gru1' // São Paulo
+
 export async function GET(request: NextRequest) {
   const linha = request.nextUrl.searchParams.get('linha')
   if (!linha) return NextResponse.json({ error: 'linha required' }, { status: 400 })
 
-  // Horário de Brasília (UTC-3)
   const agora = new Date()
+  // Horário de Brasília (UTC-3)
   const agoraBRT = new Date(agora.getTime() - 3 * 60 * 60 * 1000)
-  const inicioBRT = new Date(agoraBRT.getTime() - 30 * 60 * 1000) // 30 min atrás
+  const inicioBRT = new Date(agoraBRT.getTime() - 30 * 60 * 1000)
 
   const pad = (n: number) => String(n).padStart(2, '0')
   const fmt = (d: Date) =>
@@ -15,15 +18,12 @@ export async function GET(request: NextRequest) {
 
   const dataInicial = fmt(inicioBRT)
   const dataFinal = fmt(agoraBRT)
-
-  // Tenta formatos diferentes do código
   const codigos = [linha, linha.padStart(4, '0')].filter((v, i, a) => a.indexOf(v) === i)
 
   for (const codigo of codigos) {
     try {
       const url = `https://dados.mobilidade.rio/gps/sppo?linha=${encodeURIComponent(codigo)}&dataInicial=${encodeURIComponent(dataInicial)}&dataFinal=${encodeURIComponent(dataFinal)}`
-
-      const res = await fetch(url, { headers: { 'Accept': 'application/json' }, cache: 'no-store' })
+      const res = await fetch(url, { headers: { 'Accept': 'application/json' } })
       if (!res.ok) continue
 
       const data = await res.json()
@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
         (v: any) => v.latitude && v.longitude && v.latitude !== 0 && v.longitude !== 0
       )
 
-      return NextResponse.json({ veiculos, total: veiculos.length, codigo_usado: codigo, dataInicial, dataFinal, atualizado: agora.toISOString() })
+      return NextResponse.json({ veiculos, total: veiculos.length, codigo_usado: codigo, atualizado: agora.toISOString() })
     } catch { continue }
   }
 
