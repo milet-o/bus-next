@@ -19,11 +19,8 @@ export default function NovaViagemPage() {
   const [obs, setObs] = useState('')
   const [linhaSearch, setLinhaSearch] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
+  const [linhasFrequentes, setLinhasFrequentes] = useState<string[]>([])
   const dropdownRef = useRef<HTMLDivElement>(null)
-
-  const linhasFiltradas = linhaSearch.length > 0
-    ? LINHAS_RJ.filter(l => l.toLowerCase().includes(linhaSearch.toLowerCase())).slice(0, 25)
-    : LINHAS_RJ.slice(0, 25)
 
   const horas = Array.from({ length: 24 * 4 }, (_, i) => {
     const h = Math.floor(i / 4).toString().padStart(2, '0')
@@ -32,10 +29,34 @@ export default function NovaViagemPage() {
   })
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
       if (!user) { router.push('/'); return }
-      supabase.from('profiles').select('*').eq('id', user.id).single().then(({ data }) => setProfile(data))
+      const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single()
+      setProfile(prof)
+
+      // Buscar linhas mais usadas
+      const { data: viagens } = await supabase
+        .from('viagens')
+        .select('linha')
+        .eq('user_id', user.id)
+        .order('timestamp', { ascending: false })
+        .limit(200)
+
+      if (viagens && viagens.length > 0) {
+        // Contar frequência
+        const freq: Record<string, number> = {}
+        for (const v of viagens) {
+          freq[v.linha] = (freq[v.linha] || 0) + 1
+        }
+        // Top 8 por frequência
+        const top = Object.entries(freq)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 8)
+          .map(([l]) => l)
+        setLinhasFrequentes(top)
+      }
     })
+
     const handleClick = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setShowDropdown(false)
     }
@@ -43,11 +64,27 @@ export default function NovaViagemPage() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
 
+  // Hora atual ao carregar
+  useEffect(() => {
+    const agora = new Date()
+    const h = agora.getHours().toString().padStart(2, '0')
+    const m = (Math.floor(agora.getMinutes() / 15) * 15).toString().padStart(2, '0')
+    setHora(`${h}:${m}`)
+  }, [])
+
+  const linhasFiltradas = linhaSearch.length > 0
+    ? LINHAS_RJ.filter(l => l.toLowerCase().includes(linhaSearch.toLowerCase())).slice(0, 20)
+    : [] // quando não tiver pesquisa, mostra as frequentes no lugar
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!linha || !profile) return
     setLoading(true)
-    await supabase.from('viagens').insert({ user_id: profile.id, linha, data, hora, obs: obs || null, timestamp: new Date().toISOString() })
+    await supabase.from('viagens').insert({
+      user_id: profile.id, linha, data, hora,
+      obs: obs || null,
+      timestamp: new Date().toISOString()
+    })
     setSuccess(true)
     setLinha(''); setLinhaSearch(''); setObs('')
     setTimeout(() => setSuccess(false), 3000)
@@ -73,6 +110,74 @@ export default function NovaViagemPage() {
 
         <div className="card p-6">
           <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+
+            {/* Linha — campo principal */}
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: '#6b7394' }}>Linha</label>
+              <div className="relative" ref={dropdownRef}>
+                <input className="input" placeholder="Pesquisar linha..."
+                  value={linha || linhaSearch}
+                  onChange={e => { setLinhaSearch(e.target.value); setLinha(''); setShowDropdown(true) }}
+                  onFocus={() => setShowDropdown(true)} />
+
+                {showDropdown && (
+                  <div className="absolute top-full left-0 right-0 z-50 mt-1 rounded-xl overflow-hidden shadow-2xl"
+                    style={{ background: '#14171f', border: '1px solid #2a2f4a', boxShadow: '0 20px 60px rgba(0,0,0,0.6)' }}>
+
+                    {/* Sem pesquisa: mostrar frequentes */}
+                    {linhaSearch.length === 0 && linhasFrequentes.length > 0 && (
+                      <>
+                        <div className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider" style={{ color: '#4a5068' }}>
+                          Suas linhas mais usadas
+                        </div>
+                        {linhasFrequentes.map(l => (
+                          <button key={l} type="button"
+                            className="w-full text-left px-4 py-3 text-sm flex items-center gap-3 transition-colors"
+                            style={{ borderBottom: '1px solid #1e2235', color: '#e8eaf2' }}
+                            onMouseEnter={e => (e.currentTarget.style.background = '#1c2030')}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                            onMouseDown={() => { setLinha(l); setLinhaSearch(''); setShowDropdown(false) }}>
+                            <span style={{ color: '#ff3b3b' }}>🚌</span>
+                            {l}
+                          </button>
+                        ))}
+                        <div className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider" style={{ color: '#4a5068' }}>
+                          Digite para pesquisar todas as linhas
+                        </div>
+                      </>
+                    )}
+
+                    {/* Com pesquisa: mostrar resultados */}
+                    {linhaSearch.length > 0 && (
+                      linhasFiltradas.length === 0
+                        ? <div className="px-4 py-3 text-sm" style={{ color: '#6b7394' }}>Nenhuma linha encontrada</div>
+                        : linhasFiltradas.map(l => (
+                          <button key={l} type="button"
+                            className="w-full text-left px-4 py-2.5 text-sm transition-colors"
+                            style={{ color: '#e8eaf2', borderBottom: '1px solid #1e2235' }}
+                            onMouseEnter={e => (e.currentTarget.style.background = '#1c2030')}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                            onMouseDown={() => { setLinha(l); setLinhaSearch(''); setShowDropdown(false) }}>
+                            {l}
+                          </button>
+                        ))
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {linha && (
+                <div className="mt-2 flex items-center gap-2 px-3 py-2 rounded-lg"
+                  style={{ background: 'rgba(255,59,59,0.08)', border: '1px solid rgba(255,59,59,0.2)' }}>
+                  <span style={{ color: '#ff3b3b' }}>✓</span>
+                  <span className="text-xs font-medium flex-1" style={{ color: '#e8eaf2' }}>{linha}</span>
+                  <button type="button" onClick={() => { setLinha(''); setLinhaSearch('') }}
+                    className="text-xs" style={{ color: '#6b7394' }}>trocar</button>
+                </div>
+              )}
+            </div>
+
+            {/* Data e hora */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: '#6b7394' }}>Data</label>
@@ -87,45 +192,10 @@ export default function NovaViagemPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: '#6b7394' }}>Linha</label>
-              <div className="relative" ref={dropdownRef}>
-                <input className="input" placeholder="Buscar linha..."
-                  value={linha || linhaSearch}
-                  onChange={e => { setLinhaSearch(e.target.value); setLinha(''); setShowDropdown(true) }}
-                  onFocus={() => setShowDropdown(true)} />
-                {showDropdown && (
-                  <div className="absolute top-full left-0 right-0 z-50 mt-1 rounded-xl overflow-y-auto max-h-52 shadow-2xl"
-                    style={{ background: '#14171f', border: '1px solid #2a2f4a', boxShadow: '0 20px 60px rgba(0,0,0,0.6)' }}>
-                    {linhasFiltradas.length === 0
-                      ? <div className="px-4 py-3 text-sm" style={{ color: '#6b7394' }}>Nenhuma linha encontrada</div>
-                      : linhasFiltradas.map(l => (
-                        <button key={l} type="button"
-                          className="w-full text-left px-4 py-2.5 text-sm transition-colors"
-                          style={{ color: '#e8eaf2', borderBottom: '1px solid #1e2235' }}
-                          onMouseEnter={e => (e.currentTarget.style.background = '#1c2030')}
-                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                          onMouseDown={() => { setLinha(l); setLinhaSearch(''); setShowDropdown(false) }}>
-                          {l}
-                        </button>
-                      ))
-                    }
-                  </div>
-                )}
-              </div>
-              {linha && (
-                <div className="mt-2 flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: 'rgba(255,59,59,0.08)', border: '1px solid rgba(255,59,59,0.2)' }}>
-                  <span style={{ color: '#ff3b3b' }}>✓</span>
-                  <span className="text-xs font-medium flex-1" style={{ color: '#e8eaf2' }}>{linha}</span>
-                  <button type="button" onClick={() => { setLinha(''); setLinhaSearch('') }} className="text-xs" style={{ color: '#6b7394' }}>trocar</button>
-                </div>
-              )}
-            </div>
-
-            <div>
               <label className="block text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: '#6b7394' }}>
-                Observação <span style={{ color: '#4a5068', textTransform: 'none' }}>(opcional · público)</span>
+                Observação <span style={{ textTransform: 'none', color: '#4a5068' }}>(opcional · público)</span>
               </label>
-              <textarea className="input resize-none" rows={3} maxLength={50} placeholder="Ex: indo pra central..."
+              <textarea className="input resize-none" rows={2} maxLength={50} placeholder="Ex: indo pra central..."
                 value={obs} onChange={e => setObs(e.target.value)} />
               <div className="text-right text-xs mt-1" style={{ color: '#4a5068' }}>{obs.length}/50</div>
             </div>
