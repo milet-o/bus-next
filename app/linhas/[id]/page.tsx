@@ -27,9 +27,7 @@ export default function LinhaPage() {
 
   const [veiculos, setVeiculos] = useState<Veiculo[]>([])
   const [loading, setLoading] = useState(true)
-  const [erro, setErro] = useState(false)
   const [meuCount, setMeuCount] = useState(0)
-  const [totalViagens, setTotalViagens] = useState(0)
   const [ultimaAtualizacao, setUltimaAtualizacao] = useState<Date | null>(null)
   const [mapReady, setMapReady] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(true)
@@ -38,12 +36,8 @@ export default function LinhaPage() {
   useEffect(() => {
     supabase.auth.getUser().then(async ({ data: { user } }) => {
       if (!user) { router.push('/'); return }
-      const [{ count: meu }, { count: total }] = await Promise.all([
-        supabase.from('viagens').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('linha', linhaNome),
-        supabase.from('viagens').select('*', { count: 'exact', head: true }).eq('linha', linhaNome),
-      ])
-      setMeuCount(meu || 0)
-      setTotalViagens(total || 0)
+      const { count } = await supabase.from('viagens').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('linha', linhaNome)
+      setMeuCount(count || 0)
     })
   }, [linhaNome])
 
@@ -68,10 +62,7 @@ export default function LinhaPage() {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
   }, [])
 
-  useEffect(() => {
-    if (!mapReady) return
-    buscarGPS()
-  }, [mapReady])
+  useEffect(() => { if (mapReady) buscarGPS() }, [mapReady])
 
   useEffect(() => {
     if (!mapReady) return
@@ -88,20 +79,17 @@ export default function LinhaPage() {
 
   const buscarGPS = async () => {
     setLoading(true)
-    setErro(false)
-
     const agora = new Date()
     const pad = (n: number) => String(n).padStart(2, '0')
-    const fmt = (d: Date) =>
-      `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
     const inicio = new Date(agora.getTime() - 20 * 60 * 1000)
 
-    // Tenta direto do browser primeiro (sem proxy)
     const codigos = [linhaCode, linhaCode.padStart(4, '0')].filter((v, i, a) => a.indexOf(v) === i)
 
     for (const codigo of codigos) {
       try {
-        const url = `https://dados.mobilidade.rio/gps/sppo?linha=${encodeURIComponent(codigo)}&dataInicial=${encodeURIComponent(fmt(inicio))}&dataFinal=${encodeURIComponent(fmt(agora))}`
+        // Usa o rewrite /smtr/ como proxy — mesma origem, sem CORS
+        const url = `/smtr/gps/sppo?linha=${encodeURIComponent(codigo)}&dataInicial=${encodeURIComponent(fmt(inicio))}&dataFinal=${encodeURIComponent(fmt(agora))}`
         const res = await fetch(url)
         if (!res.ok) continue
         const data = await res.json()
@@ -111,27 +99,14 @@ export default function LinhaPage() {
         for (const v of data.veiculos) {
           if (!map[v.ordem] || v.datahora > map[v.ordem].datahora) map[v.ordem] = v
         }
-        const vs = Object.values(map).filter((v: any) => v.latitude && v.longitude)
-        setVeiculos(vs as Veiculo[])
+        const vs = Object.values(map).filter((v: any) => v.latitude && v.longitude) as Veiculo[]
+        setVeiculos(vs)
         setUltimaAtualizacao(new Date())
-        atualizarMarcadores(vs as Veiculo[])
+        atualizarMarcadores(vs)
         setLoading(false)
         return
       } catch { continue }
     }
-
-    // Se falhar, tenta via proxy
-    try {
-      const res = await fetch(`/api/gps?linha=${encodeURIComponent(linhaCode)}`)
-      const data = await res.json()
-      if (data.veiculos?.length) {
-        setVeiculos(data.veiculos)
-        setUltimaAtualizacao(new Date())
-        atualizarMarcadores(data.veiculos)
-        setLoading(false)
-        return
-      }
-    } catch {}
 
     setVeiculos([])
     setUltimaAtualizacao(new Date())
@@ -145,13 +120,11 @@ export default function LinhaPage() {
     markersRef.current.forEach(m => m.remove())
     markersRef.current = []
     if (!vs.length) return
-
     const icon = L.divIcon({
       className: '',
       html: `<div style="width:30px;height:30px;background:linear-gradient(135deg,#ff3b3b,#ff6b3b);border-radius:50%;border:2px solid rgba(255,255,255,0.8);display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 2px 12px rgba(255,59,59,0.6)">🚌</div>`,
       iconSize: [30, 30], iconAnchor: [15, 15],
     })
-
     const bounds: [number, number][] = []
     vs.forEach(v => {
       const marker = L.marker([v.latitude, v.longitude], { icon })
@@ -160,11 +133,10 @@ export default function LinhaPage() {
       markersRef.current.push(marker)
       bounds.push([v.latitude, v.longitude])
     })
-    if (bounds.length > 0) mapInstanceRef.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 })
+    if (bounds.length) mapInstanceRef.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 })
   }
 
-  const velocidadeMedia = veiculos.length > 0
-    ? Math.round(veiculos.reduce((s, v) => s + v.velocidade, 0) / veiculos.length) : 0
+  const velocidadeMedia = veiculos.length > 0 ? Math.round(veiculos.reduce((s, v) => s + v.velocidade, 0) / veiculos.length) : 0
   const emMovimento = veiculos.filter(v => v.velocidade > 0).length
 
   return (
@@ -172,29 +144,23 @@ export default function LinhaPage() {
       <Navbar />
       <div className="max-w-3xl mx-auto px-5 py-6">
         <div className="flex items-start gap-3 mb-5">
-          <button onClick={() => router.push('/linhas')}
-            className="mt-1 text-sm px-3 py-1.5 rounded-lg flex-shrink-0 transition-colors"
-            style={{ background: '#1c2030', color: '#a0a8c0' }}>← Voltar</button>
+          <button onClick={() => router.push('/linhas')} className="mt-1 text-sm px-3 py-1.5 rounded-lg flex-shrink-0" style={{ background: '#1c2030', color: '#a0a8c0' }}>← Voltar</button>
           <div className="flex-1 min-w-0">
             <h1 className="text-xl font-bold" style={{ color: '#e8eaf2' }}>{linhaNome}</h1>
             <div className="flex items-center gap-2 mt-1">
-              {!loading && !erro && (
-                <span className="flex items-center gap-1.5 text-xs" style={{ color: '#4ade80' }}>
-                  <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: '#4ade80', animation: 'pulse-dot 2s infinite' }} />
-                  Ao vivo
-                </span>
-              )}
+              <span className="flex items-center gap-1.5 text-xs" style={{ color: '#4ade80' }}>
+                <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: '#4ade80', animation: 'pulse-dot 2s infinite' }} />
+                Ao vivo
+              </span>
               {ultimaAtualizacao && <span className="text-xs" style={{ color: '#4a5068' }}>· {ultimaAtualizacao.toLocaleTimeString('pt-BR')}</span>}
             </div>
           </div>
           <div className="flex gap-2 flex-shrink-0">
-            <button onClick={() => setAutoRefresh(!autoRefresh)}
-              className="text-xs px-3 py-1.5 rounded-lg"
+            <button onClick={() => setAutoRefresh(!autoRefresh)} className="text-xs px-3 py-1.5 rounded-lg"
               style={autoRefresh ? { background: 'rgba(74,222,128,0.1)', color: '#4ade80', border: '1px solid rgba(74,222,128,0.2)' } : { background: '#1c2030', color: '#6b7394', border: '1px solid #2a2f4a' }}>
               {autoRefresh ? `↻ ${countdown}s` : '↻ Pausado'}
             </button>
-            <button onClick={() => { buscarGPS(); setCountdown(30) }}
-              className="text-xs px-3 py-1.5 rounded-lg"
+            <button onClick={() => { buscarGPS(); setCountdown(30) }} className="text-xs px-3 py-1.5 rounded-lg"
               style={{ background: 'rgba(255,59,59,0.1)', color: '#ff6b6b', border: '1px solid rgba(255,59,59,0.2)' }}>
               Atualizar
             </button>
@@ -203,14 +169,14 @@ export default function LinhaPage() {
 
         <div className="grid grid-cols-4 gap-3 mb-4">
           {[
-            { label: 'Ônibus ativos', value: loading ? '...' : veiculos.length, accent: true },
-            { label: 'Em movimento', value: loading ? '...' : emMovimento, accent: true },
-            { label: 'Vel. média', value: loading ? '...' : `${velocidadeMedia}km/h`, accent: true },
-            { label: 'Suas viagens', value: meuCount, accent: false },
+            { label: 'Ônibus ativos', value: loading ? '...' : veiculos.length },
+            { label: 'Em movimento', value: loading ? '...' : emMovimento },
+            { label: 'Vel. média', value: loading ? '...' : `${velocidadeMedia}km/h` },
+            { label: 'Suas viagens', value: meuCount },
           ].map((s, i) => (
             <div key={i} className="stat-box">
               <div className="text-xs mb-1" style={{ color: '#6b7394' }}>{s.label}</div>
-              <div className="font-bold text-lg" style={{ color: s.accent ? '#ff6b6b' : '#e8eaf2' }}>{s.value}</div>
+              <div className="font-bold text-lg" style={{ color: i < 3 ? '#ff6b6b' : '#e8eaf2' }}>{s.value}</div>
             </div>
           ))}
         </div>
@@ -219,7 +185,7 @@ export default function LinhaPage() {
           <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
           {loading && (
             <div className="absolute inset-0 flex flex-col items-center justify-center z-10" style={{ background: 'rgba(8,10,15,0.9)' }}>
-              <div className="text-4xl mb-3" style={{ animation: 'pulse-dot 1s infinite' }}>🚌</div>
+              <div className="text-4xl mb-3">🚌</div>
               <div className="text-sm font-medium" style={{ color: '#a0a8c0' }}>Buscando ônibus...</div>
             </div>
           )}
@@ -239,8 +205,7 @@ export default function LinhaPage() {
               {veiculos.slice(0, 25).map((v, i) => (
                 <div key={v.ordem} className="flex items-center gap-4 px-4 py-3"
                   style={{ borderBottom: i < veiculos.length - 1 ? '1px solid #1e2235' : 'none' }}>
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm flex-shrink-0"
-                    style={{ background: 'rgba(255,59,59,0.1)' }}>🚌</div>
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm flex-shrink-0" style={{ background: 'rgba(255,59,59,0.1)' }}>🚌</div>
                   <div className="flex-1">
                     <div className="text-sm font-mono font-semibold" style={{ color: '#e8eaf2' }}>{v.ordem}</div>
                     <div className="text-xs" style={{ color: '#4a5068' }}>{new Date(v.datahora).toLocaleTimeString('pt-BR')}</div>
